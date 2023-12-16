@@ -1,0 +1,388 @@
+---
+title: "Project 1"
+author: "Tabib Chowdhury"
+subtitle: "12/16/23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+#############
+### Setup ###
+#############
+
+library(formatR)
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+knitr::opts_chunk$set(fig.align="center")
+knitr::opts_chunk$set(fig.width=8, fig.height=6) 
+
+```
+
+```{r library, echo = FALSE}
+###############
+### Library ###
+###############
+library(PerformanceAnalytics)
+library(HDSinRdata)
+library(tidyverse)
+library(ggplot2)
+library(tableone)
+library(mice)
+library(naniar)
+library(gt)
+library(gtsummary)
+library(kableExtra)
+```
+
+## Abstract
+
+In this report, we focus on analyzing the impact of smoking during pregnancy (SDP) and exposure to environmental tobacco smoke (ETS) on adolescent self-regulation, substance use, and externalizing behaviors. Our aim is to investigate the  effects of SDP/ETS on adolescent self-regulation, substance use, and externalizing behaviors. We find significant relationships between SDP and adolescent self-regulation, substance use, and externalizing. We also attempt to find any correlation between SDP and ETS among the subjects.  
+
+## Introduction
+
+Early exposure to smoke has been linked to increased rates of externalizing behaviors in children, such as Attention-Deficit/Hyperactivity Disorder, and substance use problems, highlighting the project's relevance to public health. In this report, we conduct an exploratory data analysis of this data to examine the association between smoking during pregnancy (SDP) and environmental tobacco smoke (ETS) exposure and self-regulation, externalizing behavior, and substance use. The women in this study were recruited from a previous study on smoke avoidance intervention to reduce low-income women’s (N=738) smoking and ETS exposure during pregnancy and children’s exposure to ETS in the immediate postpartum period. A subset of adolescents (N=100) and their mothers are randomly selected for recruitment into this study. 
+
+
+In the first section we will analyze missing data and discuss options to deal with the missing data. This is followed-up by looking at some demographic statistics of the participants of the study. Next we attempt to find patterns between ETS and SDP and their effects on adolescent self-regulation, substance use, and externalizing.
+
+## Missing data
+
+```{r NA freq table, echo = FALSE}
+library(tidyverse)
+
+K01BB <- read.csv("~/Downloads/K01BB.csv")
+df <- read.csv("~/Downloads/project1 (1).csv") #49 rows, 78 cols
+df[df == ''] <- NA
+
+#frequency of variables with same number NA values
+missingVar = table(rowSums(sapply(df, is.na))) 
+as.data.frame(t(as.matrix(missingVar))) %>%
+  mutate(' ' = c('# Participants')) %>%
+  kableExtra::kbl(caption = 'Frequencies of Total Variables Missing for 
+                  Each Patient'
+                  , booktabs = T
+                  , escape = T
+                  , align = 'c') %>%
+  kableExtra::kable_classic(full_width = F
+                            , html_font = 'Cambria'
+                            , latex_options = 'HOLD_position') %>%
+  add_header_above(c(' ' = 1, "# Participants Missing" = 22)
+                   , escape = T)
+
+
+# Getting the frequency table of how many missing data each person has
+missingObs = table(colSums(sapply(df, is.na))) 
+as.data.frame(t(as.matrix(missingObs))) %>%
+  mutate(' ' = c('# Variables')) %>%
+  kableExtra::kbl(caption = 'Frequencies of Total Observations Missing for 
+                  Each Variable'
+                  , booktabs = T
+                  , escape = T
+                  , align = 'c') %>%
+  kableExtra::kable_classic(full_width = F
+                            , html_font = 'Cambria'
+                            , latex_options = 'HOLD_position') %>%
+  add_header_above(c(' ' = 1, '# Observations Missing for Each Variable' = 19)
+                   , escape = T)
+```
+
+Looking at the raw dataset we see that missing values come in the form of empty strings and NA values, we want everything to be consistent to analyze missing data so we replaced the empty strings with NA objects. To find major patterns in the missing data, we can first see if there are variables and participants with the same number of missing units. 
+
+When looking at the frequency of total variables missing for each participant(table 1), we can see that the primary pattern is that there are 8 participants missing at least 54 of the 59 variables(>91% of the columns). Looking at the frequency of participants with missing values for each variable(table 2), it is apparent that there are atleast 4 variables missing 45/49(91.8%) observations. These variables are num_cigs_30, num_e_cigs_30, num_mj_30 and num_alc_30. These record observations of the child when asked if they smoked cigarettes, e-cigaretttes or vape, marijuana or drink alcohol in the past 30 days. The reason there are so many missing observations are because these questions were asked only if the child had EVER done the activities described and most of the children had not. So we should place a zero in the where the child was asked if they smoked cigarettes, e-cigaretttes or vape, marijuana or drink alcohol in the past 30 days if the child that had never smoked cigarettes, e-cigaretttes or vape, marijuana or drink alcohol. 
+
+After doing this, we can check to see the over all missing patterns among the whole dataset. From table 3, we can see that more than 50% of the observations are missing from 5 variables:childasd, num_alc_30, num_mj_30, num_ecigs_30 and mom_smoke_pp1. The variable mom_smoke_pp1 describing the self-reported current smoker at first postpartum visit has the most missing values. This may be because many of them declined to answer. 
+
+```{r NA plots one, echo = FALSE}
+
+#df$mom_numcig[1] = 2 #"2 black and miles a day-> smoke every day"
+#df$mom_numcig[47] = 0 #none
+#df$mom_numcig[37] = 22  #20-25
+#df$mom_numcig[5] = NA
+
+
+#some NA should be 0:
+
+#num_cigs_30
+df$num_cigs_30[df$cig_ever == 0] <- 0
+#num_e_cigs
+df$num_e_cigs_30[is.na(df$e_cig_ever == 0)] <- 0
+#num_mj_30
+df$num_mj_30[is.na(df$mj_ever == 0)] <- 0
+#num_alc_30
+df$num_alc_30[is.na(df$alc_ever == 0)] <- 0
+#missing data 
+varMissingProp = miss_var_summary(df)
+varMissingProp %>%
+  filter(n_miss > 0) %>%
+  kableExtra::kbl(caption = 'Missing Data Proportion for Each Variable'
+                  , booktabs = T
+                  , escape = T
+                  , align = 'c'
+                  , col.names = c('Variable','Observation Missing','Proportion 
+                                  Missing')) %>%
+  kableExtra::kable_classic(full_width = F
+                            , html_font = 'Cambria'
+                            , latex_options = 'HOLD_position')
+
+drop.cols = colnames(df[,colSums(is.na(df))==0])
+```
+
+To visualize the missing data, the plot showing missing value percentage by variable displays missing values with atleast one NA as an observation. Those with no missing values(race ethnicity) were excluded. It can be said that there is some patterns to it as the variables look grouped together by how many observations are missing per variable.
+
+Another example of grouped missing variables come from the variables describing the average response on the Parental Knowledge Questionnaire and  of responses on the Brief Problem Monitor. Variables describing children who responded to the Parental Knowledge Questionnaire have a missing value percentage of between 26.5-32.7%, while parents who responded to the Parental Knowledge Questionnaire have a missing value percentage of between 24.5-30.6%. Variables describing children's record on the Brief Problem Monitor have a missing value rate of 24.5-28.6%
+
+Next we can stratify the missing value percentages by one of the independent variables of ETS(Environmental Tobacco Smoke): current smoker status at first postpartum visit of parent. It can be said that we are more likely to have more missing values across most of the variables if the parent is a smoker at the first postpartum visit than if they are not. It is also more likely to have missing values across all variables if the parent did not respond or follow up for the first postpartum visit. 
+
+
+```{r NA plots, echo = FALSE}
+
+df %>% 
+  dplyr::select(-one_of(drop.cols)) %>%
+   filter(!is.na(mom_smoke_pp6mo))%>%
+  gg_miss_var(show_pct = TRUE, facet = mom_smoke_pp6mo)  + ggtitle("Missing value percentage stratified by current smoker status at first postpartum visit") 
+
+
+```
+
+Given all these patters we can rule out the fact that our data is MCAR(missing completely at random). To conclude that the data is MNAR(missing not at random), we would need to investigate more as we do not know what outside factors can affect the missing data patterns. Thus the data is MAR(missing at random) because we have found significant missing data patterns though the observational data.
+
+It is important to note that the data's dimention is (49 rows, 78 cols). Because there are only 49 observations it would not be smart to perform data imputations to replace the missing values for the data set. Additionally the number of variables being larger than the number of observations does not help the case for imputaion as well. 
+
+# Exploratory Data Analysis
+
+To start the main exploratory data analysis, it is important to look at the demographics of the children and parents involved in the study. This is shown in table 4 and 5. One main concern is the imbalance of characteristics in the data. Group demographics are not proportionate across subject.
+
+```{r, echo = FALSE}
+#outcome variables: erq's, swans, child's autism, bpm
+#explanatory variables: mom's smoking behavior during pregnancy
+#split data into demographics(age, sex, race)
+df.cat = df
+col.cat = c(3:13, 15:19, 22:28, 37:42, 53:62,64,66,68)
+
+
+col.cat = c(3:13, 15:19, 22:28, 37:42, 53:62,64,66,68)
+df.cat[,col.cat] <- lapply(df.cat[,col.cat] , factor)
+df.cat$income[6]=250000
+df.cat$income = as.numeric(df.cat$income) 
+df.cat$page = as.numeric(df.cat$page)
+df.cat$tage = as.numeric(df.cat$tage)
+
+
+df.dems =  df.cat %>%
+     mutate(
+         parent_race = case_when(
+             pasian == 1 ~ "Asian",
+             paian == 1 ~ "American Indian/Alaska Native",
+             pwhite == 1 ~ "White",
+             pnhpi ==  1 ~ "Native Hawaiin or Pacific Islander",
+             prace_other == 1 ~ "Other"
+         )
+     ) %>%
+  mutate(
+         child_race = case_when(
+             tasian == 1 ~ "Asian",
+             taian == 1 ~ "American Indian/Alaska Native",
+             twhite == 1 ~ "White",
+             tnhpi ==  1 ~ "Native Hawaiin or Pacific Islander",
+             trace_other == 1 ~ "Other"
+         )
+     ) 
+
+df.dems.parents = df.dems %>%
+  dplyr::select(c(page, psex,plang, parent_race, employ, income))
+df.dems.child = df.dems %>%
+  dplyr::select(c(tage, tsex,language, child_race))
+
+#summary of parent and child demographics
+df.dems.parents %>% mutate(Employment_Status = factor(employ, levels = c(0, 1, 2), labels = c("No", "Part-Time", "Full-Time"))) %>%  mutate(Sex = factor(psex, levels = c(0, 1, 2), labels = c("Male", "Female", "Intersex"))) %>%
+  mutate(lang = factor(plang, levels = c(0, 1), labels = c("Did not speak another language at home", "Spoke another language at home"))) %>% dplyr::select(-c(psex, employ,plang)) %>% tbl_summary(label = list(Employment_Status ~ "Employment Status", lang ~ "Language Spoken", page ~ "Age", parent_race ~ "Race"), statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ), missing_text = "(Missing)") %>% modify_caption("Demographic summary of parents") %>%   bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")
+
+
+
+df.dems.child %>%  mutate(Sex = factor(tsex, levels = c(0, 1, 2), labels = c("Male", "Female", "Intersex"))) %>%
+  mutate(lang = factor(language, levels = c(0, 1), labels = c("Did not speak another language at home", "Spoke another language at home"))) %>% dplyr::select(-c(lang)) %>% tbl_summary(label = list(tsex~"Sex",language ~ "Language Spoken", tage ~ "Age", child_race ~ "Race"), statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ), type = list(tage	 ~ "continuous"),
+   missing_text = "(Missing)") %>% modify_caption("Demographic summary of children") %>%    bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>% kableExtra::kable_styling(latex_options = "scale_down") 
+
+
+```
+
+
+
+```{r, echo = FALSE}
+#SDP(smoking during pregnancy): mom_smoke_16wk, mom_smoke_22wk, mom_smoke_32wk, cotimean_34wk, 
+#ETS(environmental tobacco smoke): cotimean_pp6mo, cotimean_pp6mo_baby, smoke_exposure_
+#self-regulation: erq
+#externalizing: bpm
+#ADHD: SWAN
+#Autism
+
+#SDP
+
+df.two = df.cat
+df.two$mom_smoke_16wk <- gsub("^.{0,2}", "", df$mom_smoke_16wk)
+df.two$mom_smoke_22wk <- gsub("^.{0,2}", "", df$mom_smoke_22wk)
+df.two$mom_smoke_32wk <- gsub("^.{0,2}", "", df$mom_smoke_32wk)
+df.smoke =  data.frame(df.two$mom_smoke_16wk, df.two$mom_smoke_22wk, df.two$mom_smoke_32wk)
+df.two$smoke_count <- rowSums(df.smoke == "Yes")
+
+df.two$smoke_count <- rowSums(df.smoke == "Yes", na.rm = TRUE)
+df.two$smoke_count[38] = NA
+
+comp.df = df.two %>% dplyr::select(c(smoke_count, childasd,cotimean_34wk:bpm_int_p, ppmq_parental_knowledge:erq_exp_a, bpm_att:pmq_parental_control)) 
+comp.df[, 3:ncol(comp.df)] <- lapply(comp.df[, 3:ncol(comp.df)], as.numeric)
+
+comp.df$smoke_count <- ifelse(comp.df$smoke_count %in% c(1, 2), 1, comp.df$smoke_count)
+
+comp.table = comp.df %>% mutate(child_asd = factor(childasd, levels = c(0, 1, 2), labels = c("No", "Diagnosed", "Suspected"))) %>% dplyr::select(-childasd) %>%
+  tbl_summary(label = list(child_asd ~ "Autism Diagnosis Status"), by = smoke_count,   statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ), type = list(ppmq_parental_control	 ~ "continuous", bpm_att_a ~ "continuous",  bpm_att_p ~ "continuous",  bpm_ext_p ~ "continuous",  bpm_int_p ~ "continuous",  bpm_ext_a ~ "continuous",  bpm_int_a ~ "continuous",  bpm_att ~ "continuous",  bpm_ext ~ "continuous")) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Number of times mother said 'yes' to smoking at 16,22, and 32 weeks pregnant**") %>%
+  modify_caption("**Self Regulation and externalizing factors stratified by SDP scores**") %>%
+  bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")
+comp.table
+
+#SDP on substance abuse
+sub.sdp = df.two %>% dplyr::select(c(smoke_count,cig_ever,e_cig_ever,mj_ever,alc_ever))
+comp.sub.sdp= sub.sdp %>% 
+  tbl_summary( by = smoke_count,   statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    )) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**SDP Score**") %>%
+  modify_caption("**Substance Use stratified by SDP Score**") %>%
+  bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")
+comp.sub.sdp
+```
+
+In table 6, we perform Exploratory Data Analysis on the SDP variable which indicated if the mom had smoked in weeks 16,22 or 32. I created a new variable which counted the number of times the mom had said yes to this question to guage whether there was any specific relationship between smoking in weeks 16,22 or 32 and the dependent variables in the study. I noticed that the total number of times the mother said yes to smoking once and twice were low compared to no smoking or saying yes to smoking three times. So I combined the one and two smoking into one group and did EDA on this new dataset.  When we look at the urine cotinine levels for the mom, we can see that as the number of times the parent responded yes to smoking at those times increases the mean urine cotinine levels increase at both 34 weeks gestation and 6 months post-partinum. Similarly, the baby's urine cotinine levels increase as the smoking frequency during pregnancy increases. Additionally this relationship is statistically different between the 3 smoking groups.  
+
+To study the association between SDP and externalizing factors, we can look at the bpm scores of both the children and parents. The mean scores have a general increasing trend for internal, external and attention problems for both the parent and the children. Thus the bpm scores related to attention, externalizing and internalizing problems on self and child increase as the smoking frequency during pregnancy increases for the parent. More importantly, the same relationship exists for the child where the child's bpm scores related to attention, externalizing and internalizing problems increase as the smoking during pregnancy frequency increase. This is once again detailed in table 6.
+
+Looking at the relationship between SDP and substance use in table 7, we don't observe any major statistical differences however we can see how the use of e_cigs, cigarattes, alcohol and marijuana have a general increase as SDP scores increase. 
+
+```{r sdp, echo = FALSE}
+
+ggplot(comp.df, aes(x = bpm_int_a, fill = as.factor(smoke_count))) +
+geom_histogram(alpha = 0.6) +  labs(title = 'Histogram of BPM scores on items related to internalizing problems on self'
+       , x = 'BPM Score'
+       , color = 'SDP Smoke Count'
+       , fill = 'SDP Smoke Count'
+       , caption = 'Figure 3. Association between SDP and BPM scores')+  theme(legend.position = 'bottom'
+        , plot.title = element_text(hjust = 0.5)
+        , plot.caption = element_text(hjust = 0.5))
+
+ggplot(comp.df, aes(x = cotimean_pp6mo_baby, fill = as.factor(smoke_count))) +
+geom_histogram(alpha = 0.4) +  labs(title = 'Histogram of baby cotinine'
+       , x = 'Urine cotinine (nicotine metabolite) at 6 months postpartum from baby'
+       , color = 'SDP Smoke Count'
+       , fill = 'SDP Smoke Count'
+       , caption = 'Figure 3. Association between SDP and baby cotinean levels')+  theme(legend.position = 'bottom'
+        , plot.title = element_text(hjust = 0.5)
+        , plot.caption = element_text(hjust = 0.5))
+
+```
+
+To confirm the increasing relationship between the SDP scores and BPM scores, we construct a histogram stratified by the SDP scores where we see that low bpm scores are positively correlated with low sdp scores and high bpm scores are positively correlated with high sdp scores. Note that we don't observe the smoke count to be 2 since we grouped 1 and 2 together. The same relationship is apparent for the histogram displaying the association between baby cotinine levels and BPM scores We see that as smoke count increases BPM scores increase as well. For instance we see that a mother who smoked 3 times is the only one with a BPM score of 8.
+
+```{r ets, echo = FALSE}
+#Smoke Exposure(ETS)
+df.smoke.exp =  data.frame(df.two$smoke_exposure_6mo, df.two$smoke_exposure_12mo, df.two$smoke_exposure_2yr, df.two$smoke_exposure_3yr,df.two$smoke_exposure_4yr,df.two$smoke_exposure_5yr)
+
+df.two$smoke_count_exp <- rowSums(df.smoke.exp == 1, na.rm = TRUE)
+df.two$smoke_count_exp[which(!complete.cases(df.smoke.exp))] = NA
+
+comp.df.exp = df.two %>% dplyr::select(c(smoke_count_exp, childasd,cotimean_34wk:bpm_int_p, ppmq_parental_knowledge:erq_exp_a, bpm_att:pmq_parental_control))
+
+comp.table.exp = comp.df.exp %>% mutate(child_asd = factor(childasd, levels = c(0, 1, 2), labels = c("No", "Diagnosed", "Suspected"))) %>% dplyr::select(-childasd)%>%
+  tbl_summary(label = list(child_asd ~ "Autism Diagnosis Status"), by = smoke_count_exp,   statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ), type = list(ppmq_parental_control	 ~ "continuous", bpm_att_a ~ "continuous",  bpm_att_p ~ "continuous",  bpm_ext_p ~ "continuous",  bpm_int_p ~ "continuous",  bpm_ext_a ~ "continuous",  bpm_int_a ~ "continuous",  bpm_att ~ "continuous",  bpm_ext ~ "continuous")) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Smoke Exposure Score**") %>%
+  modify_caption("**self-regulation, substance use, and externalizing stratified by smoke exposure score**") %>%
+  bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")
+
+comp.table.exp
+
+#smoke exposure(ETS) on substance abuse
+```
+
+Similar to the SDP score, I created a new variable to score ETS exposure of each participant. I summed up the rows of recorded smoke exposure counts across the different follow-up times. Using this column, I stratified the data to find any possible relationship between smoke exposure(ETS) and adolescent self-regulation, substance use, and externalizing. Table 8 details the relationship between ETS and self-regulation and externalizing. We don't observe any statistically significant relationship between substance use and ETS smoke exposure, except for the variable describing the bpm scores related to externalizing problems on child as shown in table 8. Note: To simplify the analysis, I reported only on the complete cases however the tables also display when I don't consider missing values.
+
+However in table 9, we do see that there is a generalized increasing relationship between smoke exposure and children's alcoholic and cigarette use. More specifically, it can be said that the alcohol use increased for adolescents with higher smoke exposure. 20% of kids who drank aclohol before have smoke exposure score of 6 while only 10% of kids who drank alcohol have smoke exposure score of 1.
+
+```{r, echo = FALSE}
+
+sub.exp = df.two %>% dplyr::select(c(smoke_count_exp,cig_ever,e_cig_ever,mj_ever,alc_ever))
+comp.sub.exp = sub.exp %>% 
+  tbl_summary( by = smoke_count_exp,   statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    )) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Smoke Exposure Score**") %>%
+  modify_caption("**Substance Use stratified by smoke exposure score**") %>%
+  bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")
+comp.sub.exp
+```
+
+```{r, echo = FALSE}
+sdp_ets = df.two %>% dplyr::select(c(smoke_count_exp,smoke_count))
+colnames(sdp_ets) = c("ETS", "SDP")
+chart.Correlation(sdp_ets, histogram = TRUE, method = "pearson")
+```
+
+The figure above displays the relationship between SDP and ETS. Using the system of variables from previous sections(SDP score and ETS exposure score), we see that there is a significant linear relationship between the SDP and ETS variables. The pearson's correlation is 0.43 which indicates a positive significant correlation between SDP and ETS.
+
+\newpage
+
+
+# Conclusion
+In this report, we conducted missing and exploratory data analysis of the data provided. We found evidence that the data is MAR(missing at random). We showed this thoguh visuals, examples and tables. We also found significant relationships between SDP and adolescent self-regulation, substance use, and externalizing. This relationship was not as easily visible for ETS, however we did find some relationships between ETS and adolescent substance use. 
+
+The main set back of the study was the low number of observations. This could lead to high bias among our results. More importantly, the low number of observations decreased the statistical power of the study. Another set back of the study is having more observations than variables. Often this leads to high data sparsity, which ddidn't allow us to deal with missing data through imputaions. 
+
+\newpage
+
+## Code Appendix
+
+Github repo: https://github.com/TabibC0807/Project-1
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
