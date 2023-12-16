@@ -1,6 +1,6 @@
 # Final Project Portfolio
 
-This reposatory contains all 3 of the final versions of the projects for PHP 2550. Both the pdf report and .rmd R markdown files are included. In the following sections I will summarize the three projects as a whole
+This repository contains all 3 of the final versions of the projects for PHP 2550. Both the pdf report and .rmd R markdown files are included. In the following sections I will summarize the three projects as a whole
 
 ## Project 1
 
