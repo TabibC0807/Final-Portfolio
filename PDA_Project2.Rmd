@@ -1,0 +1,905 @@
+---
+title: "Project 2"
+author: "Tabib Chowdhury"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r libraries, include=FALSE, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+library(HDSinRdata)
+library(tidyverse)
+library(egg)
+
+library(tableone)
+library(mice)
+library(naniar)
+library(gt)
+library(gtsummary)
+library(kableExtra)
+library(lme4)
+library(reshape2)
+library(StatisticalModels)
+library(glmmLasso)
+library(pROC)
+
+```
+
+# Abstract
+
+In this collaborative project with Dr. Chris Schmid, we attempt to address the challenges of determining indication criteria and timing for tracheostomy placement in neonates with severe bronchopulmonary dysplasia (sBPD). Leveraging a national dataset comprising demographic, diagnostic, and respiratory parameters of infants from collaborative NICUs, we conducted an extensive analysis that involved Exploratory Data Analysis (EDA), missing data analysis, leading to the implementation of multiple imputation techniques. Imputation was performed for both the complete dataset and a targeted subset at 44 weeks, because we wanted to address the non-proportionate missing data between 36 and 44 weeks.
+
+To develop a robust predictive model for the composite outcome of tracheostomy/death, various model selection approaches were explored. We performed Lasso regularization based on Akaike Information Criterion (AIC) and Bayesian Information Criterion (BIC), and backward stepwise selection based on AIC. We consider 4 different logistic mixed effects models and their performance was rigorously compared using prediction, discrimination, and calibration metrics. Additionally, to find the optimal timeframe for tracheostomy, predictions were stratified across diverse subsets of the data.
+
+
+# Introduction
+
+Although many studies suggests that early tracheostomy placement for babies with severe bronchopulmonary dysplasia (sBPD) has benefits, the work around the criteria and timing of the precedure is still incomplete. In this research project, we will attempt to address this issue by developing a regression model to predict the composite outcome of tracheostomy/death to guide the indication criteria and timing of tracheostomy placement. In our model we will include birth variables, respiratory support variables, and infant data at 36 and 44 weeks corrected gestational age(CGA). We estimate an ideal time frame to refer a patient for tracheostomy by providing predictions across different postmenstrual ages. This report is split up into 7 main sections: Introduction, Methods, Exploratory  Data Analysis, Regression Analysis, Results, Discussion and Conclusion. 
+
+# Methods 
+
+We first perform multiple data imputation(m = 5) using the MICE package in R and split the data into training and testing sets with a 70-30 split. From our exploratory data analysis we know that the composite outcome of tracheostomy and death of the neonatal infants are not evenly distributed throughout the centers. This is due to the fact that the patient's severity with sBPD is correlated with which center they are placed in. Another point to consider with the centers is that once we fit a model, it will be difficult to get accurate predictions from said models since we cannot extrapolate outside the centers given in the data. Because of this we were either left with the option of leaving out the center variable and fit a  logistic generalized linear model or fit a generalized mixed effects model with the center variable as a random intercept. We chose the latter as we believe that the random intercept will capture the variability between centers for each patient based on their differing levels of severity. In our fixed effect model we consider the composite outcome of tracheostomy and death as the binary outcome variable and the patients birth variables, respiratory support variables, and infant data at 36 and 44 weeks corrected gestational age(CGA) as predictors. 
+
+# Exploratory Data Analysis
+
+Like we mentioned before, based on previous work done on the project we know that the data has been collected from multiple medical centers and the patients who go to the centers have differing levels of severity when it comes to bronchopulmonary dysplasia. To visualize this we can look at the table below that displays the proporiton of the composite death/trach outcomes by centers. Note that this table does not show all cases as there is one occurance of center 21. We remove this as it can be biased due to the low sample size. We also remove cases when both death and trach are missing since we cannot predict the outcome if both are missing. 
+
+```{r, include=FALSE, echo = FALSE}
+df <- read.csv("~/Downloads/project2.csv")
+df.three =  read.csv("~/Downloads/project2.csv")
+df = df[-810,]
+
+df = df[-which(df$record_id == df$record_id[duplicated(df$record_id)]),] #remove repeated id's
+df = subset(df, select = -c(mat_race, record_id) )
+df_center = df$center
+
+# Create a table to summarize the proportions of patients with trach and/or deaths
+prop_outcome = xtabs(~Death + Trach, data=df) %>%
+  prop.table %>%
+  addmargins
+
+#Table of proportion of deaths and trach.
+df$Composite_Outcome <- ifelse(df$Death == 1 | df$Trach == 1, 1, 0) #prevalence of death is low. 
+df.loc.comp <- df %>% #include center as mixed 
+  dplyr::select(center, Composite_Outcome) %>%
+  group_by(center) %>%
+ summarise(Proportion =mean(Composite_Outcome, na.rm = TRUE), N = sum(!is.na(Composite_Outcome)))
+
+#Create stratified table with important variables:
+
+
+
+```
+
+
+```{r, echo = FALSE}
+knitr::kable(df.loc.comp[complete.cases(df.loc.comp),])
+```
+
+From the table above we can see that the majority of death or tracheostomy occur in centers 1 and 12, even if the sample size of the center 1 and 12 are relatively low compared to the others. 
+The summary table shows huge discrepencies between death/trach outcomes between centers For example center 12 has a much higher chance of taking in more serious patients. 
+
+
+```{r, echo = FALSE, include = FALSE}
+df = df[df$hosp_dc_ga>44, ]
+
+summary_strat = df[,-c(1,2)] %>%
+  tbl_summary( by = Composite_Outcome,   statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    )) %>%
+  add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+  add_overall() %>%
+  add_n() %>%
+  modify_header(label ~ "**Variable**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Death/Trach Composite outcome**") %>%
+  modify_caption("**Data Summary stratified by Death/Trach Composite outcome**") %>%
+  bold_labels() %>%
+  as_kable_extra(booktabs = TRUE) %>%
+  kableExtra::kable_styling(latex_options = "scale_down")%>%
+   column_spec(1,width = "0.7in") %>%
+  column_spec(2,width = "0.3in") %>%
+  column_spec(3,width = "0.3in") %>%
+  column_spec(4,width = "0.3in")
+
+summary_strat
+```
+
+
+From the summary table stratified by the death and tracheostomy we find that the variables measured at 36 and 44 weeks are statistically differnet and this is a sign that they are a major predictor for our composite outcome.
+
+The summary table also shows that the number of missing values for the variables recorded at 44 weeks is significantly higher than the ones at 36 weeks. We will explore this more in the next section.
+
+# Missing data analysis:
+
+From the table of missing value proportions we can see that 55% of the surfactant variable is missing. Because of this we will drop this variable going forward.  There is also some grouping between the missing data of the 44 and 36 week data. Approximately 30% of the missing values recorded in week 44 is missing while only about 28% of the recorded values at 36 weeks is missing. Because of this I decided to fit the mixed effects model on two different datasets:
+
+This points to some pattern and structure in the missing data. Another way to visualize the missing data is to stratify the proportion of missing data by the composite outcomes. 
+
+1) The first data set contains data on both 36 and 44 week data and the multiple imputation, train/test split, and analysis was performed on both 36 and 44 week data. 
+2) The second data only includes complete(~55%) 44 week data. The multiple imputation, train/test split, and analysis was performed on only 44 week data. 
+
+This allows us to to not only compare the effects of recent recorded history of the patient vs all history, but also allows us to see if including a large amount of missing values from the 44 week data in the multiple imputation model will lead to bias and inaccuracies in our prediction. 
+
+```{r, include=TRUE, echo = FALSE}
+varMissingProp = miss_var_summary(df)
+varMissingProp %>%
+  filter(n_miss > 0) %>%
+  kableExtra::kbl(caption = 'Missing Data Proportion for Each Variable'
+                  , booktabs = T
+                  , escape = T
+                  , align = 'c'
+                  , col.names = c('Variable','Observation Missing','Proportion 
+                                  Missing')) %>%
+  kableExtra::kable_classic(full_width = F
+                            , html_font = 'Cambria'
+                            , latex_options = 'HOLD_position')
+
+drop.cols = colnames(df[,colSums(is.na(df))<=138])
+
+df %>% 
+  dplyr::select(-one_of(drop.cols), Composite_Outcome) %>%
+  filter(!is.na(Composite_Outcome))  %>%
+  gg_miss_var(show_pct = TRUE, facet = Composite_Outcome)  + ggtitle("Missing value percentage stratified") 
+
+```
+
+From the table and plot above we see that the data is missing unproportinately between 36 and 44 weeks. There also seems to be more missing values  Additionally there is some pattern to the missing data when we stratify by the composite outcome. Because of this we can say that the pattern is Missing not at random. This allows us to go forward with multiple imputation.
+
+```{r, include=FALSE, echo = FALSE}
+# Check missing values and impute using mice package
+apply(df, 2, function(x){return(sum(!is.na(x))/length(x))})
+df.two = df
+
+df.two = subset(df.two, select = -c(Death, Trach, hosp_dc_ga, any_surf) )
+
+#drop center and mat_ethn
+char_columns <- sapply(df.two, is.character)
+#char_columns = c(colnames(df.two)[char_columns], "Trach", "ventilation_support_level_modified.44", "ventilation_support_level_modified.36", "del_meth","mat_ethn")
+char_columns = c(colnames(df.two)[char_columns], "Trach", "ventilation_support_level_modified.44", "ventilation_support_level.36", "del_meth","mat_ethn")
+#df.two[char_columns] <- lapply(df.two[char_columns], factor)
+df.two[colnames(df.two) %in% char_columns] <- lapply(df.two[colnames(df.two) %in% char_columns], factor)
+
+df.two[c("blength", "ga", "weight_today.36", "weight_today.44", "peep_cm_h2o_modified.36", "peep_cm_h2o_modified.44") ] = lapply(df.two[c("blength", "ga", "weight_today.36", "weight_today.44", "peep_cm_h2o_modified.36", "peep_cm_h2o_modified.44") ], as.numeric)
+
+set.seed(2550)
+
+#use 70% of dataset as training set and 30% as test set
+ignore <- sample(c(TRUE, FALSE), size =  dim(df.two)[1], replace = TRUE, prob = c(0.3, 0.7))
+
+
+
+df_mice_out <- mice(df.two, 5, pri=F, seed = 2550, ignore = ignore)
+#df_mice_out <- mice(df.two, 5, pri=F, seed = 2550)
+imp.test1 <- filter(df_mice_out, ignore) #test set
+df_test <- vector("list",5)    
+
+for (i in 1:5){
+  df_test[[i]] <- mice::complete(imp.test1,i) 
+  df_test[[i]]$Composite_Outcome = as.integer(df_test[[i]]$Composite_Outcome)
+  df_test[[i]]$center = as.factor(df_test[[i]]$center)
+
+}
+
+# Store each imputed train set
+df_train <- vector("list",5)    
+
+imp.train <- filter(df_mice_out, !ignore) #test set
+df_train <- vector("list",5) 
+for (i in 1:5){
+  df_train[[i]] <- mice::complete(imp.train,i) 
+  df_train[[i]]$Composite_Outcome = as.integer(df_train[[i]]$Composite_Outcome)
+  df_train[[i]]$center = as.factor(df_train[[i]]$center)
+
+}
+
+
+df.44.cc = df.two[complete.cases(df.two$inspired_oxygen.44), ]
+apply(df.44.cc, 2, function(x){return(sum(!is.na(x))/length(x))})
+ignore <- sample(c(TRUE, FALSE), size =  dim(df.44.cc)[1], replace = TRUE, prob = c(0.3, 0.7))
+
+
+
+df_mice_out.44 <- mice(df.44.cc, 5, pri=F, seed = 2550, ignore = ignore)
+imp.test.44 <- filter(df_mice_out.44, ignore) #test set
+df_test.44 <- vector("list",5)    
+
+for (i in 1:5){
+  df_test.44[[i]] <- mice::complete(imp.test.44,i) 
+  df_test.44[[i]]$Composite_Outcome = as.integer(df_test.44[[i]]$Composite_Outcome)
+  df_test.44[[i]]$center = as.factor(df_test.44[[i]]$center)
+}
+
+# Store each imputed train set
+df_train.44 <- vector("list",5)    
+
+imp.train.44 <- filter(df_mice_out.44, !ignore) #test set
+df_train.44 <- vector("list",5) 
+for (i in 1:5){
+  df_train.44[[i]] <- mice::complete(imp.train.44,i) 
+  df_train.44[[i]]$Composite_Outcome = as.integer(df_train.44[[i]]$Composite_Outcome)
+  df_train.44[[i]]$center = as.factor(df_train.44[[i]]$center)
+
+}
+```
+
+ 
+
+## Regression analysis: Mixed effects model
+
+Because center is has high variance in determining the outcome, we decided to fit a mixed effects model using center as a random intercept. 
+
+We will fit 2 main models. One will include data from both 36 and 44 weeks. The second will only include 44 week data. This will allow us to see if including the 36 week data to our model is useful. We will not include race, id and discharge gestational age in any of the models as they are not logically useful in determining the outcome. 
+
+We will perform 2 main model selection with lasso and backward model selection. In total we will consider 4 main models:
+
+1) Lasso selected full model with 36 and 44 week data.
+
+2) Lasso selected 44 week data model. 
+
+3) Backward selected full model with 36 and 44 week data.
+
+4) Backward selected 44 week data model.
+
+Since our outcome is binary, we will fit a mixed effects model with the binomial(logit) family or a logistic mixed effects model. The generalized structure of a logistic mixed effects model is as follows:
+
+$$logit(p_{ij}) = \beta_0 + \beta_1 X_{1ij} + \beta_2 X_{2ij} + \ldots + \beta_p X_{pij} + u_{0j} + \epsilon_{ij}$$
+
+
+where $p_{ij}$ is the probability of success(a patient passing away or getting tracheostomy) for the ith observation in the jth center, $logit(p_{ij}) = log(\frac{p_{ij}}{1-p_{ij}})$ is the log odds of  and $\beta_0$ is the fixed intercept.
+& $\beta_1, \beta_2, \ldots, \beta_p$ are the fixed effects associated with the predictors $X_{1ij}, X_{2ij}, \ldots, X_{pij}$ respectively.
+& u_{0j} is the random intercept for the jth group, assumed to be $\text{N}(0, \sigma_u^2)$.
+& $\epsilon_{ij}$ is the residual error term.
+
+Additionally the following is assumed for any mixed effects model:
+
+1) Linearity: The relationship between the fixed effect predictors $X_{1} ,X_{2},...,X_{p}$ and the logodds of a success is linear. 
+
+2) Independence of residuals: The residuals $\epsilon_{ij}$ are independent of each other. 
+
+3) Normality of residuals: The residuals $\epsilon_{ij}$ are normally distributed.
+
+4) Homoscedasticity: The variance of the residuals is assumed to be constant across all levels of the predictors.
+
+5) Distribution of the random intercept: The random intercepts $u_{0j}$ are normally distributed around mean 0 and variance $\sigma_{j}^{2}$, i.e $u_{0j} \sim \mathcal{N}(0, \sigma_{j}^2)$
+
+Note: We don't consider interaction terms as this model is meant to be used in a clinical setting. So to keep interpretations simple we don't consider any interaction terms. During the EDA process I found multiple outliers that in birth variables which I removed before my analysis.
+
+From our multiple imputation model, we have 5 sets of training data along with 5 sets of test data for the full dataset and 5 sets of training data along with 5 sets of test data for the 44 week data. As a reminder we will fit and test 4 different models on all the training data and validate our models using the test set. 
+
+After doing imputation on the data I decieded on doing lasso and backward model selection because I wanted to perform both shrinkage regularization and a strict model selection technique and compare between the two. I decided to perform lasso and backward stepwise model selection.
+
+
+The set of models were selected using the lasso shrinkage technique on the the both the 44 and 36 week data and also only the 44 week data. Lasso is a regularization technique that prevents overfitting of the model. It is a hybrid between a strict stewise model selection and a regularization model like ridge regression. It performs both model selection and also shrinkage. 
+The full data and the 44 week data was fit to the lasso model and coefficients shrinkage and deletion of the model coefficients were completed. To find the optimal lambda parameter, I fit the models to many different lasso functions with differing lambda's. Usually lambda is chosen based on either the AIC or BIC criterions. I chose the lambda by combining these 2 criterions: I found the optimal $\lambda_{AIC}$ based on minimizing the AIC and another optimal lambda $\lambda_{BIC}$ to minimize the BIC. After doing so I took the average of the two and chose that parameter as the final shrinkage parameter. We know that AIC penalizes less for more complex models, meaning it prefers more complex models compared to BIC. Taking the average between $\lambda_{BIC}$ and $\lambda_{AIC}$ allows us to choose a sweet spot between the two criterions. After finding the optimal lambda parameter, I found the coefficients fitting all 5 training sets and averaged them out.
+Like the lasso regression process, I did backward stepwise which selects the final model based on the AIC on all 5 training sets and averaged out the coefficients. 
+
+```{r, include=FALSE, echo = FALSE}
+########Lasso selection##########
+
+lasso = function(data_df, week_all){
+#set lambdas... go from 0 to 10^5, in 10 log steps
+lambda <- 10^seq(-3,5, length=10)
+ 
+
+#dummy vectors of model fit values for each lambda: BIC, AIC, prediction error
+ 
+
+BIC_vec <- rep(Inf, length(lambda))
+AIC_vec <- rep(Inf, length(lambda))
+Devianz_ma<-NULL
+Coeff_ma<-NULL
+ 
+
+family = binomial(link = "logit")
+ 
+
+for (j in 1:length(BIC_vec)){
+  if(week_all == TRUE){
+ glm1 <-  
+ glmmLasso(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= data_df,
+ rnd = list(center=~1), 
+ family =  binomial(link = "logit"),
+ lambda = lambda[j],
+ final.re = TRUE)} else if(week_all == FALSE){
+    glm1 <-  
+ glmmLasso(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= data_df,
+ rnd = list(center=~1), 
+ family =  binomial(link = "logit"),
+ lambda = lambda[j],
+ final.re = TRUE)
+ }
+
+# code to make it continue anyway if an error occurs
+ # if(class(glm1)!="try-error")
+# { 
+ 
+ #save BIC, AIC
+ BIC_vec[j]<-glm1$bic
+ AIC_vec[j]<-glm1$aic
+ 
+ #save coefficient outputs
+ Coeff_ma<-cbind(Coeff_ma,glm1$coefficients)
+ 
+ #save error (deviance) values
+ y.hat<-predict(glm1,data_df) 
+ Devianz_ma[j]<-sum(family$dev.resids(data_df$Composite_Outcome,y.hat,wt=rep(1,length(y.hat))))
+ 
+# }
+}
+
+
+#these are the possible different optimized lambda values, based on different criteria
+lambda.final = mean(lambda[which.min(BIC_vec)], lambda[which.min(AIC_vec)])
+if(week_all == TRUE){
+glm_lasso =  glmmLasso(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= data_df,
+ rnd = list(center=~1), 
+ family =  binomial(link = "logit"),
+ lambda = lambda.final,
+ final.re = TRUE)}else if(week_all ==FALSE){
+   glm_lasso =  glmmLasso(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= data_df,
+ rnd = list(center=~1), 
+ family =  binomial(link = "logit"),
+ lambda = lambda.final,
+ final.re = TRUE)
+ }
+
+  return(glm_lasso)
+  
+}
+
+## lasso coefficients with variables of 36 and 44 :
+lasso_coef1 <- lasso(df_train[[1]], TRUE)
+lasso_coef2 <- lasso(df_train[[2]], TRUE)
+lasso_coef3 <- lasso(df_train[[3]], TRUE)
+lasso_coef4 <- lasso(df_train[[4]], TRUE)
+lasso_coef5 <- lasso(df_train[[5]], TRUE)
+lasso_coef <- cbind(lasso_coef1$coef, lasso_coef2$coef, lasso_coef3$coef, lasso_coef4$coef, lasso_coef5$coef) 
+avg_coefs_lasso.full <- apply(lasso_coef, 1, mean) 
+
+#lasso for 44 week data only:
+lasso_coef.44.1 <- lasso(df_train.44[[1]], FALSE)
+lasso_coef.44.2 <- lasso(df_train.44[[2]], FALSE)
+lasso_coef.44.3 <- lasso(df_train.44[[3]], FALSE)
+lasso_coef.44.4 <- lasso(df_train.44[[4]], FALSE)
+lasso_coef.44.5 <- lasso(df_train.44[[5]], FALSE)
+lasso_coef <- cbind(lasso_coef.44.1$coef, lasso_coef.44.2$coef, lasso_coef.44.3$coef, 
+                    lasso_coef.44.4$coef, lasso_coef.44.5$coef) 
+avg_coefs_lasso.44 <- apply(lasso_coef, 1, mean) 
+
+
+```
+
+
+
+```{r, include=FALSE, echo = FALSE}
+
+###########Backward Stepwise Model selection############
+full_mod = glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= df_train[[1]])
+
+#back on full model:
+back.full.1 = step(full_mod, direction = "backward")
+
+back.full.2 = step(glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= df_train[[2]]), direction = "backward")
+
+back.full.3 = step(glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= df_train[[3]]),  direction = "backward")
+
+back.full.4 = step(glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= df_train[[4]]), direction = "backward")
+
+back.full.5 = step(glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.36+ ventilation_support_level.36 + inspired_oxygen.36+p_delta.36+peep_cm_h2o_modified.36+med_ph.36+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+ data= df_train[[5]]), direction = "backward")
+
+all_coefs <- unique(unlist(lapply(list(back.full.1$coef, back.full.2$coef, back.full.3$coef, back.full.4$coef, back.full.5$coef), names)))
+
+avg_coefs_back.full <- sapply(all_coefs, function(coef_name) {
+  coef_values <- sapply(list(back.full.1$coef, back.full.2$coef, back.full.3$coef, back.full.4$coef, back.full.5$coef), function(model_coef) {
+    if (coef_name %in% names(model_coef)) {
+      return(model_coef[coef_name])
+    } else {
+      return(0)
+    }
+  })
+  return(mean(coef_values))
+})
+
+me.full.1 = glmer(Composite_Outcome ~ birth_hc+com_prenat_ster+blength+  prenat_ster+ventilation_support_level.36 + inspired_oxygen.36+peep_cm_h2o_modified.36+weight_today.36+ p_delta.36  +                      + med_ph.36 +weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train[[1]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.full.2 = glmer(Composite_Outcome ~ birth_hc+com_prenat_ster+blength+  prenat_ster+ventilation_support_level.36 + inspired_oxygen.36+peep_cm_h2o_modified.36+weight_today.36+ p_delta.36  +                      + med_ph.36 +weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train[[2]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.full.3 = glmer(Composite_Outcome ~ birth_hc+com_prenat_ster+blength+  prenat_ster+ventilation_support_level.36 + inspired_oxygen.36+peep_cm_h2o_modified.36+weight_today.36+ p_delta.36  +                      + med_ph.36 +weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train[[3]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+
+me.full.4 = glmer(Composite_Outcome ~ birth_hc+com_prenat_ster+blength+  prenat_ster+ventilation_support_level.36 + inspired_oxygen.36+peep_cm_h2o_modified.36+weight_today.36+ p_delta.36  +                      + med_ph.36 +weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train[[4]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+
+me.full.5 = glmer(Composite_Outcome ~ birth_hc+com_prenat_ster+blength+  prenat_ster+ventilation_support_level.36 + inspired_oxygen.36+peep_cm_h2o_modified.36+weight_today.36+ p_delta.36  +                      + med_ph.36 +weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train[[5]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+step_coef <- cbind(fixef(me.full.1), fixef(me.full.2),fixef(me.full.3),fixef(me.full.4), fixef(me.full.5)) 
+avg_coefs_backstep.full <- apply(step_coef, 1, mean)
+
+
+#backward stepwise on only 44 weeks.
+four_mod.1 = glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+               data= df_train.44[[1]])
+four_mod.2= glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+               data= df_train.44[[2]])
+four_mod.3 = glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+               data= df_train.44[[3]])
+four_mod.4 = glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+               data= df_train.44[[4]])
+four_mod.5 = glm(Composite_Outcome ~ bw+ga+blength+birth_hc+prenat_ster+com_prenat_ster+mat_chorio+ gender+sga+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44,
+               data= df_train.44[[5]])
+
+all_coefs <- unique(unlist(lapply(list(four_mod.1$coef, four_mod.2$coef, four_mod.3$coef, four_mod.4$coef, four_mod.5$coef), names)))
+
+avg_coefs_back.44 <- sapply(all_coefs, function(coef_name) {
+  coef_values <- sapply(list(four_mod.1$coef, four_mod.2$coef, four_mod.3$coef, four_mod.4$coef, four_mod.5$coef), function(model_coef) {
+    if (coef_name %in% names(model_coef)) {
+      return(model_coef[coef_name])
+    } else {
+      return(0)
+    }
+  })
+  return(mean(coef_values))
+})
+
+me.44.1 = glmer(Composite_Outcome ~ bw+ga+blength+birth_hc+com_prenat_ster+  prenat_ster+mat_chorio + gender+sga+weight_today.44+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train.44[[1]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.44.2 = glmer(Composite_Outcome ~ bw+ga+blength+birth_hc+com_prenat_ster+  prenat_ster+mat_chorio + gender+sga+weight_today.44+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train.44[[2]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.44.3 = glmer(Composite_Outcome ~ bw+ga+blength+birth_hc+com_prenat_ster+  prenat_ster+mat_chorio + gender+sga+weight_today.44+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train.44[[3]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.44.4 = glmer(Composite_Outcome ~ bw+ga+blength+birth_hc+com_prenat_ster+  prenat_ster+mat_chorio + gender+sga+weight_today.44+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train.44[[4]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+me.44.5 = glmer(Composite_Outcome ~ bw+ga+blength+birth_hc+com_prenat_ster+  prenat_ster+mat_chorio + gender+sga+weight_today.44+weight_today.44+ ventilation_support_level_modified.44 + inspired_oxygen.44+p_delta.44+peep_cm_h2o_modified.44+med_ph.44 + (1 | center), data = df_train.44[[5]],control=glmerControl(optimizer="bobyqa"), family = binomial) 
+
+step_coef.44 <- cbind(fixef(me.44.1), fixef(me.44.2),fixef(me.44.3),fixef(me.44.4), fixef(me.44.5)) 
+avg_coefs_backstep.44 <- apply(step_coef.44, 1, mean)
+
+```
+
+
+## Fixed Effects table: 
+
+```{r, include=FALSE, echo = FALSE}
+#make dataframe to compare coefficients
+all_coefficients <- unique(c(names(avg_coefs_backstep.full), names(avg_coefs_backstep.44), names(avg_coefs_lasso.44), names(avg_coefs_lasso.full)))
+
+# Create a data frame with coefficients from all models
+coefficients_table <- data.frame(
+  Coefficient = all_coefficients,
+  avg_coefs_backstep.full = ifelse(all_coefficients %in% names(avg_coefs_backstep.full), avg_coefs_backstep.full[all_coefficients], 0),
+  avg_coefs_backstep.44 = ifelse(all_coefficients %in% names(avg_coefs_backstep.44), avg_coefs_backstep.44[all_coefficients], 0),
+  avg_coefs_lasso.44 = ifelse(all_coefficients %in% names(avg_coefs_lasso.44), avg_coefs_lasso.44[all_coefficients], 0),
+  avg_coefs_lasso.full = ifelse(all_coefficients %in% names(avg_coefs_lasso.full), avg_coefs_lasso.full[all_coefficients], 0)
+)
+#coefficients_table$avg_coefs_backstep.full <- exp(coefficients_table$avg_coefs_backstep.full)
+#coefficients_table$avg_coefs_backstep.44 <- exp(coefficients_table$avg_coefs_backstep.44)
+#coefficients_table$avg_coefs_lasso.44 <- exp(coefficients_table$avg_coefs_lasso.44)
+#coefficients_table$avg_coefs_lasso.full <- exp(coefficients_table$avg_coefs_lasso.full)
+
+# Print the coefficients table
+colnames(coefficients_table) = c("Coefficient", "Full Backward", "44 week Backstep", "44 week Lasso", "Full Lasso")
+knitr::kable(coefficients_table)
+coefficients_table.pres = coefficients_table
+
+```
+
+```{r, include=TRUE, echo = FALSE}
+coefficients_table.pres = coefficients_table %>% mutate_if(is.numeric, round, digits=3)
+coefficients_table.pres[,1] = c("Intercept","Birth head circumference","Prenatal Steroids(Yes)", "Birth length", "Prenatal Corticosteroids(Yes)", "Ventilation support level at 36 weeks(Non-invasive positive pressure)","Ventilation support level at 36 weeks(Invasive positive pressure)", "Fraction of Inspired Oxygen at 36 weeks", "Positive and exploratory pressure at 36 weeks", "Weight at 36 weeks", "Peak Inspiratory Pressure at 36 weeks", "Medication for Pulmonary Hypertension at 36 weeks", "Weight at 44 weeks", "Ventilation support level at 44 weeks(Non-invasive positive pressure)", "Ventilation support level at 44 weeks(Invasive positive pressure)", "Fraction of Inspired Oxygen needed at 44 weeks", "Peak Inspiratory Pressure needed at 44 weeks", "Positive and exploratory pressure at 44 weeks", "Medication for Pulmonary Hypertension at 44 weeks", "Birth weight","Obstetrical gestational age", "Maternal Chorioamnionitis(Yes)", "Gender(Male)", "Small for gestational age(Yes)")
+format_zeros <- function(x) {
+  ifelse(x == 0, 0, as.character(x))
+}
+
+# Apply formatting to the data frame
+formatted_data <- coefficients_table.pres
+formatted_data[, -1] <- lapply(formatted_data[, -1], format_zeros)
+
+kable(formatted_data, booktabs = T) %>%
+  kable_styling(position = "center", latex_options = "scale_down")
+
+
+fin_coef_table = formatted_data %>%
+  kable("html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  add_header_above(c(" ", "Backward Stepwise Selected" = 2, "Lasso Selected" = 2), bold = TRUE, background = "#888888", color = "white") %>%
+  #row_spec(0, background = "#4e3629", color = "white")%>%
+  row_spec(c(6:12), background = c("#4e3629"), color = "white")%>%
+  row_spec(c(13:19), background = c("#888888"), color = "white")
+
+
+# Print the table
+
+```
+
+## Model Selection Analysis:
+
+From the table of ceofficient above, we can see that the variables Obstetrical gestational age, Maternal Chorioamnionitis, gender and sga are selected only the 44 week backward stepwise selected model.  Another important observation when it comes to model selection is the fact that the 44 week lasso model only selects 5 variables which is significantly lower than the rest of the models. We also see that the lasso models are very strict when it comes to model selection. They don't select any variables outside the ones that are time specific(i.e the variables end with 36 or 44). The only exception to this is Obstetrical gestational age. 
+
+## Intepretation:
+ 
+ The value of each coefficient represents the increase or decrease in the log odds of death or tracheostomy. The variables describing ventilation support at 44 weeks, weight, Medication for Pulmonary Hypertension at 36 week are less than zero across all models. This means that those who  non-invasive positive pressure ventalation support at 44 weeks have lower log odds of death or tracheostomy compared to those who do invasive positive press conditioned that we keep other covariates constant. A negative coefficient for weight at 36 weeks indicates that as the the weight of the patient at 36 increases, the log odds of death or trach decreases. These two interpretations makes sense. 
+ 
+Birth Variables: The variable sga is a discrete variable describing whether the baby is small for its gestational age. We find that the the sga variable is not selected by any of the models except the 44 week backward stepwise selected model. Since the corresponding coefficient is positive we can say that according this model, babies that are small for their age have a higher likelihood(log odds) of death or recieving tracheostomy. 
+
+Comparing variables at 36 vs 44 weeks: To compare variables at 36 and 44 weeks we can look at the full lasso and backward selected models. The variable insired_oxygen.36 and inspired_oxygen.44 represent the fraction of inspired Oxygen at 36 and 44 weeks. The insired_oxygen.36 coeffcient is positive while the inspired_oxygen.44 is negative. This means that higher levels of inspired oxygen at 36 weeks is associated with higher log odds of death or tracheostomy while higher levels of inspired oxygen at 44 weeks is associated with lower log odds of death or trach. Another variable that behaves similary is  med_ph.36 and  med_ph.44. We see that the coefficient that represents medication for Pulmonary Hypertension(PH) at 36 and 44 weeks are of opposite signs. This indicates that patients who take medication for PH at 36 weeks have a lower log-odds of the death/trach compared to those who don't. Where was those who take medication for PH at 44 weeks have a higher log-odds of death/trach compared to those who don't. Finally the variable representing Peak Inspiratory Pressure (cmH2O) at 36 and 44 weeks are also of opposite signs, meaning that cmH2O levels have differing associations with death/trach at 36 and 44 weeks. 
+
+Comparing time and birth variables: We find that overall, the time variable and history is a significant predictor when it comes to predicting death/trancheostomy. This is specially evident in the lasso models where none of the birth variables were selelcted and only the time variables were selected. 
+
+Next, we can study how the random effect of centers influence the outcome of death/trach for each center.
+
+## Random effects visualized: 
+
+To visualize the random effects of the model we can first create a table that takes calculates the mean of each center's random effect accross each of the 4 models. 
+
+```{r, include=TRUE,echo = FALSE }
+var.full.back = mean(as.numeric(VarCorr(me.full.1)), as.numeric(VarCorr(me.full.2)), as.numeric(VarCorr(me.full.3)), as.numeric(VarCorr(me.full.4)), as.numeric(VarCorr(me.full.5)))
+
+var.44.back = mean(as.numeric(VarCorr(me.44.1)), as.numeric(VarCorr(me.44.2)), as.numeric(VarCorr(me.44.3)), as.numeric(VarCorr(me.44.4)), as.numeric(VarCorr(me.44.5)))
+
+
+
+ran_ef.full.back = rowMeans(data.frame(ranef(me.full.1, which = "center", condVar = TRUE)$center, ranef(me.full.2, which = "center", condVar = TRUE)$center, ranef(me.full.3, which = "center", condVar = TRUE)$center, ranef(me.full.4, which = "center", condVar = TRUE)$center, ranef(me.full.5, which = "center", condVar = TRUE)$center))
+ran_ef.full.back["variance"] = var.full.back
+
+ran_ef.44.back = rowMeans(data.frame(ranef(me.44.1, which = "center", condVar = TRUE)$center, ranef(me.44.2, which = "center", condVar = TRUE)$center, ranef(me.44.3, which = "center", condVar = TRUE)$center, ranef(me.44.4, which = "center", condVar = TRUE)$center, ranef(me.44.5, which = "center", condVar = TRUE)$center))
+ran_ef.44.back["variance"] = var.44.back
+
+ran_ef.full.lasso = rowMeans(data.frame(lasso_coef1$ranef, lasso_coef2$ranef, lasso_coef3$ranef,lasso_coef4$ranef,lasso_coef5$ranef))
+
+ran_ef.full.lasso["variance"] = mean(as.numeric(lasso_coef1$StdDev^2), as.numeric(lasso_coef2$StdDev^2),as.numeric(lasso_coef3$StdDev^2),as.numeric(lasso_coef4$StdDev^2),as.numeric(lasso_coef5$StdDev^2))
+
+ran_ef.44.lasso = rowMeans(data.frame(lasso_coef.44.1$ranef, lasso_coef.44.2$ranef, lasso_coef.44.3$ranef,lasso_coef.44.4$ranef,lasso_coef.44.5$ranef))
+
+ran_ef.44.lasso["variance"] = mean(as.numeric(lasso_coef.44.1$StdDev^2), as.numeric(lasso_coef.44.2$StdDev^2),as.numeric(lasso_coef.44.3$StdDev^2),as.numeric(lasso_coef.44.4$StdDev^2),as.numeric(lasso_coef.44.5$StdDev^2))
+
+
+ran_ef.full.back = data.frame(ran_ef.full.back)
+ran_ef.44.back <- c(ran_ef.44.back[1:3], 0, ran_ef.44.back[4:length(ran_ef.44.back)])
+ran_ef.44.back = data.frame(ran_ef.44.back)
+ran_ef.full.lasso = data.frame(ran_ef.full.lasso)
+ran_ef.44.lasso <- c(ran_ef.44.lasso[1:3], 0, ran_ef.44.lasso[4:length(ran_ef.44.lasso)])
+ran_ef.44.lasso = data.frame(ran_ef.44.lasso)
+
+row.names(ran_ef.44.back) = row.names(ran_ef.44.lasso)
+row.names(ran_ef.full.back) = row.names(ran_ef.full.lasso)
+
+
+ran_ef_df = data.frame(ran_ef.full.back, ran_ef.44.back, ran_ef.full.lasso, ran_ef.44.lasso)
+colnames(ran_ef_df) = c("Full Backwards", "44 week backwards", "Full Lasso", "44 Week Lasso")
+knitr::kable(ran_ef_df)
+```
+
+The table shows the average random effect of each center for each model along with average variance. We can see that patients in center 12 have the highest random effect that is positively associated with the log odds of death/tracheostomy, while centers 2, 3, and 7 have the most negative random effects. This indicates that those random effect of centers 2, 3, and 7 have the most negative influence towards the log odds of death/trach.
+
+```{r, include=TRUE,echo = FALSE}
+
+# Print the merged data frame
+#lattice::dotplot(ranef(me.full.1, which = "center", condVar = TRUE), title = "First Random Effect of full model")$center
+lattice::dotplot(ranef(me.full.1, which = "center", condVar = TRUE), title = "First Random Effect of full model")$center
+
+```
+
+The plots above illustrate the random effects for the full backward selected model in a dot plot and its variance. We see a similar trend as the table. 
+
+# ROC and calibration curves for Backward stepwise and Lasso model
+
+To evaluate the discriminiation and calibration of our models we will look at ROC curves along with calibration plots. When we test for calibration and discrimination we will use the test data. 
+
+```{r, include=FALSE, echo = FALSE}
+
+#full backwards model
+models = list(me.full.1, me.full.2, me.full.3, me.full.4, me.full.5)
+predictions_list <- lapply(1:5, function(i) {
+  predict(models[[i]], newdata = df_test[[1]], type = "response",allow.new.levels = TRUE)
+})
+combined_predictions.back.full <- rowMeans(do.call(cbind, predictions_list))
+roc_curve.back.full <- roc(response = df_test[[1]]$Composite_Outcome, predictor = combined_predictions.back.full)
+auc_value.back.full <- auc(roc_curve.back.full)
+
+
+plot(roc_curve.back.full ,main ="Backward Selected Full model", print.auc=TRUE, print.thres = TRUE)
+
+
+#calibration
+brier.back.full = mean((combined_predictions.back.full - (as.numeric(df_test[[1]]$Composite_Outcome)))^2)
+
+#calibration: make tables of Brier Scores
+num_cuts <- 10
+calib_data.back.full <-  data.frame(prob = combined_predictions.back.full,
+                          bin = cut(combined_predictions.back.full, breaks = num_cuts),
+                          class = df_test[[1]]$Composite_Outcome)
+calib_data.back.full <- calib_data.back.full %>% 
+             group_by(bin) %>% 
+             dplyr::summarize(observed = sum(class)/n(), 
+                       expected = sum(prob)/n(), 
+                       se = sqrt(observed*(1-observed)/n()))
+#calib_data
+calib.back.full = ggplot(calib_data.back.full) + 
+  geom_abline(intercept = 0, slope = 1, color="red") + 
+  geom_errorbar(aes(x = expected, ymin=observed-1.96*se, 
+                    ymax=observed+1.96*se), 
+                colour="black", width=.01)+
+  geom_point(aes(x = expected, y = observed)) +
+  labs(x="Expected Proportion", y="Observed Proportion") +
+  ggtitle("Full Backward selected Regression")+
+
+  theme_minimal()
+
+# 44 backwards model
+models = list(me.44.1, me.44.2, me.44.5, me.44.4, me.44.5)
+predictions_list <- lapply(1:5, function(i) {
+  predict(models[[i]], newdata = df_test.44[[1]], type = "response", allow.new.levels = TRUE)
+})
+combined_predictions.back.44 <- rowMeans(do.call(cbind, predictions_list))
+roc_curve.back.44 <- roc(response = df_test.44[[1]]$Composite_Outcome, predictor = combined_predictions.back.44)
+auc_value.back.44 <- auc(roc_curve.back.44)
+
+
+plot(roc_curve.back.44, main ="Backward Selected 44 week model", print.auc=TRUE, print.thres = TRUE)
+
+
+#calibration
+brier.back.44 = mean((combined_predictions.back.44 - (as.numeric(df_test.44[[1]]$Composite_Outcome)))^2)
+
+#calibration: make tables of Brier Scores
+num_cuts <- 10
+calib_data.back.44 <-  data.frame(prob = combined_predictions.back.44,
+                          bin = cut(combined_predictions.back.44, breaks = num_cuts),
+                          class = df_test.44[[1]]$Composite_Outcome)
+calib_data.back.44 <- calib_data.back.44 %>% 
+             group_by(bin) %>% 
+             dplyr::summarize(observed = sum(class)/n(), 
+                       expected = sum(prob)/n(), 
+                       se = sqrt(observed*(1-observed)/n()))
+#calib_data
+calib_data.back.44 = ggplot(calib_data.back.44) + 
+  geom_abline(intercept = 0, slope = 1, color="red") + 
+  geom_errorbar(aes(x = expected, ymin=observed-1.96*se, 
+                    ymax=observed+1.96*se), 
+                colour="black", width=.01)+
+  geom_point(aes(x = expected, y = observed)) +
+  labs(x="Expected Proportion", y="Observed Proportion") +
+  ggtitle("44 Week Backward selected Regression")+
+
+  theme_minimal()
+
+```
+
+
+```{r, include=FALSE, echo = FALSE}
+#full backwards model
+models = list(lasso_coef1, lasso_coef2, lasso_coef3, lasso_coef4, lasso_coef5)
+predictions_list <- lapply(1:5, function(i) {
+  predict(models[[i]], newdata = df_test[[1]], type = "response")
+})
+#######START HERE##########
+combined_predictions.lasso.full <- rowMeans(do.call(cbind, predictions_list))
+roc_curve.lasso.full <- roc(response = df_test[[1]]$Composite_Outcome, predictor = combined_predictions.lasso.full)
+auc_value.lasso.full <- auc(roc_curve.lasso.full)
+
+
+plot(roc_curve.lasso.full ,main ="ROC curve Lasso Selected Full model", print.auc=TRUE, print.thres = TRUE)
+
+
+#calibration
+brier.lasso.full = mean((combined_predictions.lasso.full - (as.numeric(df_test[[1]]$Composite_Outcome)))^2)
+
+#calibration: make tables of Brier Scores
+num_cuts <- 10
+calib_data.lasso.full <-  data.frame(prob = combined_predictions.lasso.full,
+                          bin = cut(combined_predictions.lasso.full, breaks = num_cuts),
+                          class = df_test[[1]]$Composite_Outcome)
+calib_data.lasso.full <- calib_data.lasso.full %>% 
+             group_by(bin) %>% 
+             dplyr::summarize(observed = sum(class)/n(), 
+                       expected = sum(prob)/n(), 
+                       se = sqrt(observed*(1-observed)/n()))
+#calib_data
+calib_data.lasso.full = ggplot(calib_data.lasso.full) + 
+  geom_abline(intercept = 0, slope = 1, color="red") + 
+  geom_errorbar(aes(x = expected, ymin=observed-1.96*se, 
+                    ymax=observed+1.96*se), 
+                colour="black", width=.01)+
+  geom_point(aes(x = expected, y = observed)) +
+  labs(x="Expected Proportion", y="Observed Proportion") +
+  ggtitle("Full Lasso Regression")+
+
+  theme_minimal()
+
+# 44 lasso model
+models = list(lasso_coef.44.1, lasso_coef.44.2, lasso_coef.44.3, lasso_coef.44.4, lasso_coef.44.5)
+predictions_list <- lapply(1:5, function(i) {
+  predict(models[[i]], newdata = df_test.44[[1]], type = "response")
+})
+combined_predictions.lasso.44 <- rowMeans(do.call(cbind, predictions_list))
+roc_curve.lasso.44 <- roc(response = df_test.44[[1]]$Composite_Outcome, predictor = combined_predictions.lasso.44)
+auc_value.lasso.44 <- auc(roc_curve.lasso.44)
+
+
+plot(roc_curve.lasso.44, main ="ROC curve Lasso Selected 44 week model", print.auc=TRUE, print.thres = TRUE)
+
+
+#calibration
+brier.lasso.44 = mean((combined_predictions.lasso.44 - (as.numeric(df_test.44[[1]]$Composite_Outcome)))^2)
+
+#calibration: make tables of Brier Scores
+num_cuts <- 10
+calib_data.lasso.44 <-  data.frame(prob = combined_predictions.back.44,
+                          bin = cut(combined_predictions.back.44, breaks = num_cuts),
+                          class = df_test.44[[1]]$Composite_Outcome)
+calib_data.lasso.44 <- calib_data.lasso.44 %>% 
+             group_by(bin) %>% 
+             dplyr::summarize(observed = sum(class)/n(), 
+                       expected = sum(prob)/n(), 
+                       se = sqrt(observed*(1-observed)/n()))
+#calib_data
+calib_data.lasso.44 = ggplot(calib_data.lasso.44) + 
+  geom_abline(intercept = 0, slope = 1, color="red") + 
+  geom_errorbar(aes(x = expected, ymin=observed-1.96*se, 
+                    ymax=observed+1.96*se), 
+                colour="black", width=.01)+
+  geom_point(aes(x = expected, y = observed)) +
+  labs(x="Expected Proportion", y="Observed Proportion") +
+  ggtitle("44 Week Lasso selected Regression")+
+
+  theme_minimal()
+
+```
+
+
+```{r, include=TRUE, echo = FALSE}
+par(mfrow=c(2,2))
+plot(roc_curve.back.full ,main ="ROC curve Backward Selected Full model", print.auc=TRUE, print.thres = TRUE)
+plot(roc_curve.back.44, main ="ROC curve Backward Selected 44 week model", print.auc=TRUE, print.thres = TRUE)
+plot(roc_curve.lasso.full ,main ="ROC curve Lasso Selected Full model", print.auc=TRUE, print.thres = TRUE)
+plot(roc_curve.back.44, main ="ROC curve Lasso Selected 44 week model", print.auc=TRUE, print.thres = TRUE)
+```
+
+The ROC curves for all 4 models show good discrimination among all 4 models as the ROC curves are above the specificy = sensitivity line. Additionally we see that the AUC scores are all above 89% which is good. 
+
+
+# Plot Calibration curves for all models:
+
+```{r, include=TRUE, echo = FALSE}
+library(egg)
+ggarrange(calib.back.full,
+calib_data.back.44,
+calib_data.lasso.full,
+calib_data.lasso.44, ncol = 2, nrow =2)
+```
+
+The calibration plots groups the data by the estimated probabilities and compares the mean probability with the observed proportion of observations of death/trach. The plots show that that the estimated distribution from the models are very close to the true distribution. The plots also include standard errors from a 95% confidence interval. The standard errors for the logistic regression model intersect with the red line(i.e the perfect fit where our estimated and true distributions match). It is worrisome that the standard error lines around 0.6 is so large for the full backward selected model. Additionally the confidence interval for the expected proportion around 0.75 does not intersect the red line. For the lasso model we see that the standard errors increase as the expected proportions increase. 
+
+A measure of calibration is the brier score. We summarize that in the table in the following section, along with the measures of accuracy and discrimination.
+
+# Prediction metrics
+
+```{r,include = TRUE, echo = FALSE}
+model_names <- c("Backward Selected Full model", "Backward Selected 44 week model", "Lasso Selected Full mode", "Lasso Selected 44 week model")
+auc_scores <- c(auc_value.back.full, auc_value.back.44, auc_value.lasso.full, auc_value.lasso.44)
+brier_scores <- c(brier.back.full, brier.back.44, brier.lasso.full, brier.lasso.44)
+
+# Create a data frame
+model_data <- data.frame(Model = model_names, AUC = auc_scores, Brier_Score = brier_scores)
+
+pred_ys <- ifelse(combined_predictions.back.full > as.numeric(coords(roc_curve.back.full, "best", ret = "threshold")), 1, 0)
+tab_outcome <- table(df_test[[1]]$Composite_Outcome, pred_ys)
+sens.back.full <- tab_outcome[2,2]/(tab_outcome[2,1]+tab_outcome[2,2])
+spec.back.full <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[1,2])
+ppv.back.full <- tab_outcome[2,2]/(tab_outcome[1,2]+tab_outcome[2,2])
+npv.back.full  <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[2,1])
+acc.back.full  <- (tab_outcome[1,1]+tab_outcome[2,2])/sum(tab_outcome)
+
+pred_ys <- ifelse(combined_predictions.back.44 > as.numeric(coords(roc_curve.back.44, "best", ret = "threshold")), 1, 0)
+tab_outcome <- table(df_test.44[[1]]$Composite_Outcome, pred_ys)
+sens.back.44 <- tab_outcome[2,2]/(tab_outcome[2,1]+tab_outcome[2,2])
+spec.back.44 <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[1,2])
+ppv.back.44 <- tab_outcome[2,2]/(tab_outcome[1,2]+tab_outcome[2,2])
+npv.back.44  <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[2,1])
+acc.back.44 <- (tab_outcome[1,1]+tab_outcome[2,2])/sum(tab_outcome)
+
+pred_ys <- ifelse(combined_predictions.lasso.full > as.numeric(coords(roc_curve.lasso.full, "best", ret = "threshold"))
+, 1, 0)
+tab_outcome <- table(df_test[[1]]$Composite_Outcome, pred_ys)
+sens.lasso.full <- tab_outcome[2,2]/(tab_outcome[2,1]+tab_outcome[2,2])
+spec.lasso.full <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[1,2])
+ppv.lasso.full <- tab_outcome[2,2]/(tab_outcome[1,2]+tab_outcome[2,2])
+npv.lasso.full <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[2,1])
+acc.lasso.full<- (tab_outcome[1,1]+tab_outcome[2,2])/sum(tab_outcome)
+
+pred_ys <- ifelse(combined_predictions.lasso.44 > as.numeric(coords(roc_curve.lasso.44, "best", ret = "threshold"))
+, 1, 0)
+tab_outcome <- table(df_test.44[[1]]$Composite_Outcome, pred_ys)
+sens.lasso.44 <- tab_outcome[2,2]/(tab_outcome[2,1]+tab_outcome[2,2])
+spec.lasso.44 <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[1,2])
+ppv.lasso.44 <- tab_outcome[2,2]/(tab_outcome[1,2]+tab_outcome[2,2])
+npv.lasso.44 <- tab_outcome[1,1]/(tab_outcome[1,1]+tab_outcome[2,1])
+acc.lasso.44<- (tab_outcome[1,1]+tab_outcome[2,2])/sum(tab_outcome)
+
+model_data$Accuracy = c(acc.back.full, acc.back.44, acc.lasso.full, acc.lasso.44)
+model_data$PPV = c(ppv.back.full, ppv.back.44, ppv.lasso.full, ppv.lasso.44)
+model_data$NPV = c(npv.back.full, npv.back.44, npv.lasso.full, npv.lasso.44)
+model_data$Sensitivity = c(sens.back.full, sens.back.44, sens.lasso.full, sens.lasso.44)
+model_data$Specificity = c(spec.back.full, spec.back.44, spec.lasso.full, spec.lasso.44)
+
+knitr::kable(model_data)
+```
+
+From the table above we find that the highest AUC score, accuracy and specificiy between the 4 models come from the backward selected model. The lowest Brier score also comes from the backward selected model. One worrying factor from the table above is the significanly low PPV(Positive Predictive value). This indicates a high false positive rate. This may be due to the fact that our data is not proportional between the outcomes of death/trach(i.e the proportion of those who have died or recieved trach is significantly lower than those who did not). However because the prediction, discrimination and calibration scores are so close between the full model and the 44 week model, it may imply that the 36 week data is not needed to accurately predict the outcomes
+
+# Prediction on different ages
+
+To find the timeframe at which death or trach is most likely to occur, we can plot weight at 36 and 44 weeks against the predicted probability of the outcome(trach or death). 
+
+
+```{r,include = TRUE, echo = FALSE, warning=FALSE, message=FALSE}
+# Assuming logistic_model is your logistic regression model
+# Assuming your_data is your dataset
+
+# Create a grid of values for weight_today.44 and weight_today.36
+options(warn=-1)
+
+weight_today.44_values <- seq(min(df.two$weight_today.44[-3], na.rm = TRUE), max(df.two$weight_today.44, na.rm = TRUE), length.out = 100)
+weight_today.36_values <- seq(min(df.two$weight_today.36, na.rm = TRUE), max(df.two$weight_today.36, na.rm = TRUE), length.out = 100)
+
+# Create a data frame with all combinations of weight_today.44 and weight_today.36
+grid <- data.frame(expand.grid(weight_today.44 = weight_today.44_values, weight_today.36 = weight_today.36_values))
+grid = df_test[[1]][-which(df_test[[1]]$weight_today.44 < 2200 | df_test[[1]]$weight_today.36 < 1000 | df_test[[1]]$weight_today.36 >2800 ),]
+#grid = grid[-which(df_test[[1]]$weight_today.36 < 1000 ),]
+# Make predictions for each combination
+#full backwards model
+models = list(me.full.1, me.full.2, me.full.3, me.full.4, me.full.5)
+predictions_list <- lapply(1:5, function(i) {
+  predict(models[[i]], newdata = grid, type = "response")
+})
+grid$predicted_prob  <- rowMeans(do.call(cbind, predictions_list))
+# Plot the predicted probabilities
+options(repr.plot.width = 1, repr.plot.height =2) 
+
+ggplot(grid, aes(x = weight_today.44, y = predicted_prob)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Predicted Probabilities at 44 weeks",
+       x = "Weight at 44 weeks",
+       y = "Predicted Probability of death/tracheostomy")
+  
+options(repr.plot.width = 1, repr.plot.height =2) 
+
+ggplot(grid, aes(x = weight_today.36, y = predicted_prob)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Predicted Probabilities 36 weeks",
+       x = "Weight at 36 weeks",
+       y = "Predicted Probability of death/tracheostomy") 
+
+
+
+```
+
+From the plot above we can see that the for the 36 week data, those around the weight of 2000 are more likely to get death/trach while for those in 44 week data, those above 4000 are the most likely to get death/trach. 
+
+# Discussion and Conclusion
+
+In conclusion, we found that a full mixed effect model is best for prediction for the outcome of death and trachoestomy. Additionally, implementing a full model with both the 36 week and 44 week data allowed us to compare the coefficeints between 36 and 44 week data. We found that the variables describing the fraction of inspired Oxygen, medication for Pulmonary Hypertension(PH) and Peak Inspiratory Pressure (cmH2O) has opposite effects on the log odds of death/tracheostomy. We also found that the influence random effects of the centers on the log odds of the outcome accurately depict what we discussed in the EDA section.
+
+
+Some of the setbacks of our work here is that we don't take into account some of the outliers in the data, although we did remove outliers heavily affecting the data we predicted on. There are many missing values that are indiscriminate between 36 weeks and 44 weeks which can sway the bias of the models. The model is difficult to generalize outside of centers included in the data. We don't use interaction terms.
+
+
+\newpage
+
+## Code Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
